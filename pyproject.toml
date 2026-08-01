@@ -1,0 +1,7 @@
+[project]
+name = "evil-meshtastic"
+version = "0.1.0"
+description = "Python attack toolkit demonstrating Meshtastic mesh protocol attack surface (DEF CON HRV research)"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = ["meshtastic>=2.5", "pycryptodome>=3.20", "pypubsub>=4.0", "textual>=0.70"]
