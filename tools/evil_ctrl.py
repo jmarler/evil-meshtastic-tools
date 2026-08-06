@@ -44,6 +44,10 @@ Usage:
     python tools/evil_ctrl.py --port /dev/cu.SLAB_USBtoUART --evil \\
         --set flood=on flood-count=50 flood-keys=true
 
+    # Sync-word jam burst for 5 s (cage-only — run only on your own isolated mesh)
+    python tools/evil_ctrl.py --port /dev/cu.SLAB_USBtoUART --evil \\
+        --set jam=on jam-ms=5000
+
     # Append " [EVIL]" suffix to all relayed messages
     python tools/evil_ctrl.py --port /dev/cu.SLAB_USBtoUART --evil \\
         --set transform=suffix suffix=" [EVIL]"
@@ -65,6 +69,8 @@ Key=value options for --set:
     flood=on|off                         Trigger NodeInfo flood immediately
     flood-count=1-200                    Ghost node count (default: 50)
     flood-keys=true|false                Include fake 32-byte public keys in flood
+    jam=on|off                           Trigger a sync-word jam burst immediately
+    jam-ms=100-60000                     Jam burst duration (default: 5000)
 
 Requires: heltec-v4-evil-full build (EVIL_NODE=1, all features compiled in).
 """
@@ -82,6 +88,7 @@ EVIL_CTRL_PORTNUM = 256
 # EvilCtrlMsg field tags (see evil_control.pb.h):
 #   1=transform  2=suffix  3=drop_rate   4=drop_node  5=drop_channel
 #   6=hop_mode   7=flood   8=flood_count 9=flood_keys 10=get_status
+#   11=token (fixed64, unused here)  12=is_reply  13=jam  14=jam_ms
 
 
 def _varint(value: int) -> bytes:
@@ -127,6 +134,8 @@ def encode_evil_ctrl_msg(
     flood_count: int = 0,
     flood_keys: bool = False,
     get_status: bool = False,
+    jam: bool = False,
+    jam_ms: int = 0,
 ) -> bytes:
     """
     Encode an EvilCtrlMsg as a nanopb-compatible protobuf byte string.
@@ -147,6 +156,8 @@ def encode_evil_ctrl_msg(
     msg += _field_uint32(8, flood_count)
     msg += _field_bool(9, flood_keys)
     msg += _field_bool(10, get_status)
+    msg += _field_bool(13, jam)
+    msg += _field_uint32(14, jam_ms)
     return bytes(msg)
 
 
@@ -247,11 +258,29 @@ def parse_set_args(pairs: list) -> dict:
             else:
                 raise ValueError(f"flood-keys must be true/false, got {val!r}")
 
+        elif key == "jam":
+            v = val.lower()
+            if v in ("on", "true", "1", "yes"):
+                result["jam"] = True
+            elif v in ("off", "false", "0", "no"):
+                result["jam"] = False
+            else:
+                raise ValueError(f"jam must be on/off, got {val!r}")
+
+        elif key in ("jam-ms", "jam_ms"):
+            try:
+                n = int(val)
+            except ValueError:
+                raise ValueError(f"jam-ms must be an integer 100-60000, got {val!r}")
+            if not (100 <= n <= 60000):
+                raise ValueError(f"jam-ms must be 100-60000 (firmware clamps), got {n}")
+            result["jam_ms"] = n
+
         else:
             raise ValueError(
                 f"unknown key {key!r}.  Valid keys: "
                 "transform, suffix, drop, drop-node, drop-channel, "
-                "hop, flood, flood-count, flood-keys"
+                "hop, flood, flood-count, flood-keys, jam, jam-ms"
             )
 
     return result
@@ -369,6 +398,8 @@ def _decode_evil_ctrl_reply(raw: bytes) -> dict:
                 result["flood_keys"] = bool(val)
             elif field_num == 12:
                 result["is_reply"] = bool(val)
+            elif field_num == 14:
+                result["jam_ms"] = val
 
         elif wire_type == 1:  # 64-bit fixed
             i += 8  # skip token field
@@ -410,6 +441,7 @@ def print_reply_summary(fields: dict) -> None:
     hop_mode     = fields.get("hop_mode", 0)
     flood_count  = fields.get("flood_count", 0)
     flood_keys   = fields.get("flood_keys", False)
+    jam_ms       = fields.get("jam_ms", 0)
 
     t_name = _TRANSFORM_NAMES.get(transform, str(transform))
     if transform == 3 and suffix:
@@ -425,6 +457,7 @@ def print_reply_summary(fields: dict) -> None:
     fc = flood_count or 50
     fk = "yes" if flood_keys else "no"
     print(f"    flood        : armed  count={fc}  keys={fk}")
+    print(f"    jam          : configured duration={jam_ms or 5000}ms (one-shot trigger, not persistent)")
 
 
 def print_state_summary(kwargs: dict) -> None:
@@ -439,6 +472,8 @@ def print_state_summary(kwargs: dict) -> None:
     flood_count  = kwargs.get("flood_count", 0)
     flood_keys   = kwargs.get("flood_keys", False)
     get_status   = kwargs.get("get_status", False)
+    jam          = kwargs.get("jam", False)
+    jam_ms       = kwargs.get("jam_ms", 0)
 
     t_name = _TRANSFORM_NAMES.get(transform, str(transform))
     if transform == 3 and suffix:
@@ -456,6 +491,10 @@ def print_state_summary(kwargs: dict) -> None:
               f"keys={'yes' if flood_keys else 'no'}")
     else:
         print(f"    flood        : off")
+    if jam:
+        print(f"    jam          : TRIGGER  duration={jam_ms or 5000}ms")
+    else:
+        print("    jam          : off")
     if get_status:
         print(f"    get_status   : true  (check device serial for log output)")
 
@@ -522,6 +561,8 @@ def main():
             "flood_count":  0,
             "flood_keys":   False,
             "get_status":   False,
+            "jam":          False,
+            "jam_ms":       0,
         }
         print("[*] Resetting all evil features to off:")
 
