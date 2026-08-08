@@ -44,7 +44,32 @@ import sys
 import time
 import signal
 
+from meshtastic import mesh_pb2, portnums_pb2
+
 from common import add_connection_args, build_interface, evil_mode, print_banner
+
+
+def send_position(iface, latitude, longitude, altitude, channel_index, hop_limit):
+    """Broadcast a Position packet, bypassing meshtastic's sendPosition().
+
+    sendPosition() only sets latitude_i/longitude_i when the value is
+    non-zero, so it silently drops both fields when broadcasting exactly
+    (0, 0) -- the packet goes out with no position data at all. Build the
+    protobuf directly so an intentional (0, 0) still gets sent.
+    """
+    p = mesh_pb2.Position()
+    p.latitude_i = int(latitude / 1e-7)
+    p.longitude_i = int(longitude / 1e-7)
+    if altitude != 0:
+        p.altitude = int(altitude)
+
+    return iface.sendData(
+        p,
+        destinationId="^all",
+        portNum=portnums_pb2.PortNum.POSITION_APP,
+        channelIndex=channel_index,
+        hopLimit=hop_limit,
+    )
 
 
 def lerp(a, b, t):
@@ -109,12 +134,13 @@ def main():
             lon = args.lon
 
         try:
-            iface.sendPosition(
+            send_position(
+                iface,
                 latitude=lat,
                 longitude=lon,
                 altitude=args.alt,
-                channelIndex=args.channel,
-                hopLimit=args.hop_limit,
+                channel_index=args.channel,
+                hop_limit=args.hop_limit,
             )
             count += 1
             print(f"  [{count:>4}] Broadcast position: ({lat:.6f}, {lon:.6f}, {args.alt}m)")
